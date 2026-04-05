@@ -84,7 +84,16 @@ function buildRequestMessages() {
   if (systemPrompt.value.trim()) {
     outgoing.push({ role: "system", content: systemPrompt.value.trim() });
   }
-  return outgoing.concat(messages.value.map(({ role, content }) => ({ role, content })));
+  return outgoing.concat(
+    messages.value
+      .filter(
+        (message) =>
+          typeof message?.content === "string" &&
+          message.content.trim() &&
+          ["system", "user", "assistant"].includes(message.role),
+      )
+      .map(({ role, content }) => ({ role, content: content.trim() })),
+  );
 }
 
 function upsertAssistantMessage(content) {
@@ -108,6 +117,31 @@ function parseDelta(delta) {
   return "";
 }
 
+async function parseErrorResponse(response) {
+  const raw = await response.text();
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed.detail || raw || `Request failed with status ${response.status}.`;
+  } catch {
+    return raw || `Request failed with status ${response.status}.`;
+  }
+}
+
+async function sendNonStreamingFallback(payload) {
+  const response = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseErrorResponse(response));
+  }
+
+  const parsed = await response.json();
+  upsertAssistantMessage(parsed.content || "No content returned.");
+}
+
 async function sendMessage() {
   if (isSending.value || !draft.value.trim()) return;
   if (!selectedModel.value) {
@@ -124,22 +158,23 @@ async function sendMessage() {
   const controller = new AbortController();
   abortController.value = controller;
   let assistantContent = "";
+  const payload = {
+    model: selectedModel.value,
+    messages: buildRequestMessages(),
+    temperature: temperature.value,
+    max_tokens: maxTokens.value,
+  };
 
   try {
     const response = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: selectedModel.value,
-        messages: buildRequestMessages(),
-        temperature: temperature.value,
-        max_tokens: maxTokens.value,
-      }),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
 
     if (!response.ok || !response.body) {
-      throw new Error(`Request failed with status ${response.status}.`);
+      throw new Error(await parseErrorResponse(response));
     }
 
     const reader = response.body.getReader();
@@ -180,10 +215,16 @@ async function sendMessage() {
     if (controller.signal.aborted) {
       statusMessage.value = "Generation stopped.";
     } else {
-      statusMessage.value = error instanceof Error ? error.message : "Request failed.";
-      upsertAssistantMessage(
-        assistantContent || "The request failed before a response was completed.",
-      );
+      try {
+        await sendNonStreamingFallback(payload);
+        statusMessage.value = "Ready. Stream failed, fallback response used.";
+      } catch (fallbackError) {
+        statusMessage.value =
+          fallbackError instanceof Error ? fallbackError.message : "Request failed.";
+        upsertAssistantMessage(
+          assistantContent || "The request failed before a response was completed.",
+        );
+      }
     }
   } finally {
     isSending.value = false;
@@ -275,4 +316,3 @@ onMounted(async () => {
     </main>
   </div>
 </template>
-
