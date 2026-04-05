@@ -1,0 +1,330 @@
+:root {
+  color-scheme: dark;
+  font-family: "IBM Plex Sans", "Noto Sans SC", "Segoe UI Variable", sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  background:
+    radial-gradient(circle at top left, rgba(244, 127, 36, 0.18), transparent 24rem),
+    radial-gradient(circle at bottom right, rgba(26, 115, 232, 0.16), transparent 28rem),
+    #0b1020;
+  color: #edf3ff;
+  --panel: rgba(10, 17, 35, 0.78);
+  --panel-strong: rgba(12, 20, 40, 0.95);
+  --border: rgba(173, 193, 255, 0.15);
+  --accent: #ff8243;
+  --accent-soft: rgba(255, 130, 67, 0.12);
+  --text-dim: #8ea1c7;
+  --user: #1a73e8;
+  --assistant: #10203b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+textarea,
+select,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.shell {
+  position: relative;
+  min-height: 100vh;
+  padding: 2rem;
+}
+
+.shell-background {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.5), transparent 90%);
+  pointer-events: none;
+}
+
+.topbar,
+.workspace {
+  position: relative;
+  z-index: 1;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1.5rem;
+  align-items: flex-end;
+  margin-bottom: 1.5rem;
+}
+
+.topbar h1,
+.empty-state h2 {
+  margin: 0;
+  font-size: clamp(1.8rem, 3vw, 3rem);
+  line-height: 1.05;
+}
+
+.eyebrow {
+  margin: 0 0 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.78rem;
+  color: var(--accent);
+}
+
+.topbar-actions,
+.composer-actions,
+.status-row,
+.panel-grid {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 1.25rem;
+  min-height: calc(100vh - 9rem);
+}
+
+.control-panel,
+.chat-stage {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  backdrop-filter: blur(20px);
+  border-radius: 1.5rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.28);
+}
+
+.control-panel {
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.panel-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.field-label {
+  font-size: 0.84rem;
+  color: var(--text-dim);
+}
+
+.field-input,
+.composer-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  padding: 0.9rem 1rem;
+}
+
+.field-input:focus,
+.composer-input:focus {
+  outline: 2px solid rgba(255, 130, 67, 0.35);
+  border-color: rgba(255, 130, 67, 0.45);
+}
+
+.prompt-box {
+  min-height: 9rem;
+  resize: vertical;
+}
+
+.chat-stage {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  overflow: hidden;
+}
+
+.status-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.2rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.92rem;
+}
+
+.message-list {
+  padding: 1.2rem;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.empty-state {
+  margin: auto 0;
+  padding: 2rem;
+  border: 1px dashed var(--border);
+  border-radius: 1.25rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.empty-state p:last-child {
+  color: var(--text-dim);
+  max-width: 38rem;
+}
+
+.message-card {
+  max-width: min(54rem, 92%);
+  padding: 1rem 1.1rem;
+  border-radius: 1.1rem;
+  border: 1px solid var(--border);
+}
+
+.message-header {
+  margin-bottom: 0.4rem;
+}
+
+.message-role {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.message-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.role-user {
+  align-self: flex-end;
+  background: linear-gradient(135deg, rgba(26, 115, 232, 0.32), rgba(26, 115, 232, 0.16));
+}
+
+.role-assistant {
+  align-self: flex-start;
+  background: rgba(16, 32, 59, 0.92);
+}
+
+.role-system {
+  align-self: center;
+  background: rgba(255, 130, 67, 0.1);
+}
+
+.composer {
+  border-top: 1px solid var(--border);
+  padding: 1rem 1.2rem 1.2rem;
+  background: var(--panel-strong);
+}
+
+.composer-input {
+  min-height: 8.5rem;
+  resize: vertical;
+  margin-bottom: 0.9rem;
+}
+
+.primary-button,
+.ghost-button {
+  border-radius: 999px;
+  padding: 0.8rem 1.2rem;
+  border: 1px solid transparent;
+  transition: transform 120ms ease, background 120ms ease, opacity 120ms ease;
+}
+
+.primary-button {
+  background: linear-gradient(135deg, #ff8243, #f2b63d);
+  color: #09111f;
+  font-weight: 700;
+}
+
+.ghost-button {
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  border-color: var(--border);
+}
+
+.primary-button:hover,
+.ghost-button:hover {
+  transform: translateY(-1px);
+}
+
+.primary-button:disabled,
+.ghost-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border: 1px solid var(--border);
+}
+
+.status-pill[data-state="ready"] {
+  color: #7ef2a8;
+  background: rgba(126, 242, 168, 0.08);
+}
+
+.status-pill[data-state="degraded"] {
+  color: #ffca6b;
+  background: rgba(255, 202, 107, 0.08);
+}
+
+.status-pill[data-state="offline"] {
+  color: #ff908f;
+  background: rgba(255, 144, 143, 0.08);
+}
+
+.status-pill[data-state="checking"] {
+  color: #8fb8ff;
+  background: rgba(143, 184, 255, 0.08);
+}
+
+@media (max-width: 960px) {
+  .shell {
+    padding: 1rem;
+  }
+
+  .topbar,
+  .workspace {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .topbar {
+    align-items: stretch;
+  }
+
+  .topbar-actions,
+  .composer-actions,
+  .panel-grid {
+    flex-direction: column;
+  }
+
+  .message-card {
+    max-width: 100%;
+  }
+}
+
