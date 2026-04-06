@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import json
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -162,7 +163,32 @@ async def _load_models() -> list[str]:
     return [item.get("id", "") for item in payload.get("data", []) if item.get("id")]
 
 
+def _public_model_name() -> str:
+    return settings.openai_model_name
+
+
+def _to_public_model_name(model_name: str, available_models: list[str] | None = None) -> str:
+    canonical = settings.vllm_model or ((available_models or [None])[0])
+    if canonical and model_name == canonical:
+        return _public_model_name()
+    return model_name
+
+
+def _to_canonical_model_name(
+    model_name: str | None,
+    available_models: list[str] | None = None,
+) -> str | None:
+    if model_name is None:
+        return None
+    canonical = settings.vllm_model or ((available_models or [None])[0])
+    public = _public_model_name()
+    if model_name == public and canonical:
+        return canonical
+    return model_name
+
+
 def _resolve_model(requested_model: str | None, available_models: list[str]) -> str:
+    requested_model = _to_canonical_model_name(requested_model, available_models)
     if requested_model:
         return requested_model
     if settings.vllm_model:
@@ -176,6 +202,37 @@ def _prepare_openai_payload(payload: dict, available_models: list[str]) -> dict:
     prepared = dict(payload)
     prepared["model"] = _resolve_model(prepared.get("model"), available_models)
     return prepared
+
+
+def _rewrite_models_payload(payload: dict) -> dict:
+    rewritten = dict(payload)
+    available_models = [
+        item.get("id")
+        for item in payload.get("data", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    ]
+    data = []
+    for item in payload.get("data", []):
+        if not isinstance(item, dict):
+            continue
+        rewritten_item = dict(item)
+        model_id = rewritten_item.get("id")
+        if isinstance(model_id, str):
+            rewritten_item["id"] = _to_public_model_name(model_id, available_models)
+        root = rewritten_item.get("root")
+        if isinstance(root, str):
+            rewritten_item["root"] = _to_public_model_name(root, available_models)
+        data.append(rewritten_item)
+    rewritten["data"] = data
+    return rewritten
+
+
+def _rewrite_chat_payload(payload: dict, available_models: list[str] | None = None) -> dict:
+    rewritten = dict(payload)
+    model_name = rewritten.get("model")
+    if isinstance(model_name, str):
+        rewritten["model"] = _to_public_model_name(model_name, available_models)
+    return rewritten
 
 
 async def _proxy_openai_request(
@@ -247,6 +304,15 @@ async def _proxy_openai_request(
             error_type="api_connection_error",
         )
 
+    if upstream_response.headers.get("content-type", "").startswith("application/json"):
+        try:
+            available_models = await _load_models()
+            rewritten_payload = _rewrite_chat_payload(upstream_response.json(), available_models)
+        except ValueError:
+            rewritten_payload = None
+        if rewritten_payload is not None:
+            return JSONResponse(status_code=upstream_response.status_code, content=rewritten_payload)
+
     return Response(
         content=upstream_response.content,
         status_code=upstream_response.status_code,
@@ -292,7 +358,14 @@ async def openai_models(authorization: str | None = Header(default=None)) -> Res
             error_type="invalid_api_key",
             error_code="invalid_api_key",
         )
-    return await _proxy_openai_request("/v1/models")
+    proxied = await _proxy_openai_request("/v1/models")
+    if not isinstance(proxied, Response) or proxied.status_code >= 400:
+        return proxied
+    try:
+        raw_payload = json.loads(proxied.body.decode("utf-8"))
+    except ValueError:
+        return proxied
+    return JSONResponse(status_code=proxied.status_code, content=_rewrite_models_payload(raw_payload))
 
 
 @app.post("/v1/chat/completions")

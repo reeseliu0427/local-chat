@@ -84,7 +84,7 @@ curl https://ai.leisgroup.online/v1/chat/completions \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "/media/leis/研三数据盘/models/gemma-4-E4B-it/models/google/gemma-4-E4B-it",
+    "model": "gemma-4-E4B",
     "messages": [{"role": "user", "content": "Say only: hello"}],
     "temperature": 0,
     "max_tokens": 16
