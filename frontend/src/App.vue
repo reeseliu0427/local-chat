@@ -27,6 +27,7 @@ const loginError = ref("");
 const selectedImageDataUrl = ref("");
 const selectedImageName = ref("");
 const composerFileInput = ref(null);
+const isSidebarCollapsed = ref(false);
 
 const hasMessages = computed(() => messages.value.length > 0);
 const hasPendingInput = computed(() => Boolean(draft.value.trim() || selectedImageDataUrl.value));
@@ -584,15 +585,32 @@ onMounted(async () => {
         </div>
       </header>
 
-      <main class="workspace">
-        <ControlPanel
-          v-model="selectedModel"
-          v-model:system-prompt="systemPrompt"
-          v-model:temperature="temperature"
-          v-model:max-tokens="maxTokens"
-          :available-models="availableModels"
-          :connection-state="connectionState"
-        />
+      <main class="workspace" :class="{ 'workspace-sidebar-collapsed': isSidebarCollapsed }">
+        <aside class="sidebar-shell" :class="{ 'sidebar-shell-collapsed': isSidebarCollapsed }">
+          <div class="sidebar-header">
+            <div>
+              <p class="eyebrow">Connection</p>
+              <h2 class="sidebar-title">{{ isSidebarCollapsed ? "Panel" : "Connection" }}</h2>
+            </div>
+            <button
+              class="ghost-button sidebar-toggle"
+              type="button"
+              @click="isSidebarCollapsed = !isSidebarCollapsed"
+            >
+              {{ isSidebarCollapsed ? "Expand" : "Collapse" }}
+            </button>
+          </div>
+          <div v-show="!isSidebarCollapsed" class="sidebar-body">
+            <ControlPanel
+              v-model="selectedModel"
+              v-model:system-prompt="systemPrompt"
+              v-model:temperature="temperature"
+              v-model:max-tokens="maxTokens"
+              :available-models="availableModels"
+              :connection-state="connectionState"
+            />
+          </div>
+        </aside>
 
         <section class="chat-stage">
           <div class="status-bar">

@@ -26,6 +26,8 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 button,
@@ -41,12 +43,16 @@ button {
 
 #app {
   min-height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 .shell {
   position: relative;
   min-height: 100vh;
+  height: 100dvh;
   padding: 2rem;
+  overflow: hidden;
 }
 
 .shell-login {
@@ -106,7 +112,51 @@ button {
   display: grid;
   grid-template-columns: 340px minmax(0, 1fr);
   gap: 1.25rem;
-  min-height: calc(100vh - 9rem);
+  height: calc(100dvh - 9rem);
+  min-height: 0;
+}
+
+.workspace-sidebar-collapsed {
+  grid-template-columns: 96px minmax(0, 1fr);
+}
+
+.sidebar-shell {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.9rem;
+  min-height: 0;
+}
+
+.sidebar-shell-collapsed {
+  align-content: start;
+}
+
+.sidebar-header {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  backdrop-filter: blur(20px);
+  border-radius: 1.5rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.28);
+  padding: 1rem 1rem 1.05rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.sidebar-title {
+  margin: 0;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.sidebar-toggle {
+  width: 100%;
+}
+
+.sidebar-body {
+  min-height: 0;
+  overflow: auto;
 }
 
 .login-shell {
@@ -165,6 +215,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  min-height: 0;
 }
 
 .panel-block {
@@ -203,6 +254,7 @@ button {
   display: grid;
   grid-template-rows: auto 1fr auto;
   overflow: hidden;
+  min-height: 0;
 }
 
 .status-bar {
@@ -221,6 +273,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  min-height: 0;
 }
 
 .empty-state {
@@ -533,11 +586,22 @@ button {
     align-items: stretch;
   }
 
+  .workspace,
+  .workspace-sidebar-collapsed {
+    height: calc(100dvh - 8.5rem);
+    grid-template-columns: 1fr;
+  }
+
   .topbar-actions,
   .panel-grid,
   .composer-toolbar,
   .composer-toolbar-actions {
     flex-direction: column;
+  }
+
+  .sidebar-shell,
+  .sidebar-shell-collapsed {
+    grid-template-rows: auto auto;
   }
 
   .message-card {
