@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     auth_cookie_name: str = Field(default="local_chat_session")
     auth_cookie_secure: bool = Field(default=False)
     auth_session_ttl_hours: int = Field(default=72)
+    openai_api_key: str = Field(default="local-chat-openai-key")
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import AsyncIterator
 
 import httpx
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Response, status
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -112,6 +112,45 @@ def _require_auth(
     return username
 
 
+def _openai_error_response(
+    message: str,
+    *,
+    status_code: int,
+    error_type: str,
+    error_code: str | None = None,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": {
+                "message": message,
+                "type": error_type,
+                "param": None,
+                "code": error_code,
+            }
+        },
+    )
+
+
+def _require_openai_api_key(authorization: str | None = Header(default=None)) -> None:
+    expected = settings.openai_api_key
+    if not expected:
+        return
+
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing bearer token.",
+        )
+
+    token = authorization.removeprefix("Bearer ").strip()
+    if not hmac.compare_digest(token, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key.",
+        )
+
+
 async def _load_models() -> list[str]:
     client: httpx.AsyncClient = app.state.http_client
     try:
@@ -131,6 +170,88 @@ def _resolve_model(requested_model: str | None, available_models: list[str]) -> 
     if available_models:
         return available_models[0]
     raise HTTPException(status_code=503, detail="No vLLM model is currently available.")
+
+
+def _prepare_openai_payload(payload: dict, available_models: list[str]) -> dict:
+    prepared = dict(payload)
+    prepared["model"] = _resolve_model(prepared.get("model"), available_models)
+    return prepared
+
+
+async def _proxy_openai_request(
+    path: str,
+    *,
+    method: str = "GET",
+    payload: dict | None = None,
+    stream: bool = False,
+) -> Response:
+    client: httpx.AsyncClient = app.state.http_client
+
+    if stream:
+        async def event_stream() -> AsyncIterator[bytes]:
+            try:
+                async with client.stream(
+                    method,
+                    _vllm_url(path),
+                    json=payload,
+                    headers={"Accept": "text/event-stream"},
+                    timeout=None,
+                ) as upstream_response:
+                    upstream_response.raise_for_status()
+                    async for chunk in upstream_response.aiter_bytes():
+                        if chunk:
+                            yield chunk
+            except httpx.HTTPStatusError as exc:
+                body = exc.response.text
+                try:
+                    error_payload = exc.response.json()
+                except ValueError:
+                    error_payload = {
+                        "error": {
+                            "message": body or "Upstream request failed.",
+                            "type": "invalid_request_error",
+                            "param": None,
+                            "code": None,
+                        }
+                    }
+                yield JSONResponse(status_code=exc.response.status_code, content=error_payload).body
+            except httpx.HTTPError as exc:
+                yield _openai_error_response(
+                    f"Failed to reach vLLM backend: {exc}",
+                    status_code=502,
+                    error_type="api_connection_error",
+                ).body
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    try:
+        upstream_response = await client.request(method, _vllm_url(path), json=payload)
+        upstream_response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        try:
+            error_payload = exc.response.json()
+        except ValueError:
+            error_payload = {
+                "error": {
+                    "message": exc.response.text or "Upstream request failed.",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": None,
+                }
+            }
+        return JSONResponse(status_code=exc.response.status_code, content=error_payload)
+    except httpx.HTTPError as exc:
+        return _openai_error_response(
+            f"Failed to reach vLLM backend: {exc}",
+            status_code=502,
+            error_type="api_connection_error",
+        )
+
+    return Response(
+        content=upstream_response.content,
+        status_code=upstream_response.status_code,
+        media_type=upstream_response.headers.get("content-type", "application/json"),
+    )
 
 
 @app.get("/api/auth/session", response_model=SessionResponse)
@@ -158,6 +279,69 @@ async def auth_login(payload: LoginRequest, response: Response) -> SessionRespon
 async def auth_logout(response: Response) -> SessionResponse:
     _clear_session_cookie(response)
     return SessionResponse(authenticated=False, username=None)
+
+
+@app.get("/v1/models")
+async def openai_models(authorization: str | None = Header(default=None)) -> Response:
+    try:
+        _require_openai_api_key(authorization)
+    except HTTPException as exc:
+        return _openai_error_response(
+            str(exc.detail),
+            status_code=exc.status_code,
+            error_type="invalid_api_key",
+            error_code="invalid_api_key",
+        )
+    return await _proxy_openai_request("/v1/models")
+
+
+@app.post("/v1/chat/completions")
+async def openai_chat_completions(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> Response:
+    try:
+        _require_openai_api_key(authorization)
+    except HTTPException as exc:
+        return _openai_error_response(
+            str(exc.detail),
+            status_code=exc.status_code,
+            error_type="invalid_api_key",
+            error_code="invalid_api_key",
+        )
+
+    try:
+        payload = await request.json()
+    except ValueError:
+        return _openai_error_response(
+            "Request body must be valid JSON.",
+            status_code=400,
+            error_type="invalid_request_error",
+        )
+
+    if not isinstance(payload, dict):
+        return _openai_error_response(
+            "Request body must be a JSON object.",
+            status_code=400,
+            error_type="invalid_request_error",
+        )
+
+    available_models = await _load_models()
+    try:
+        prepared_payload = _prepare_openai_payload(payload, available_models)
+    except HTTPException as exc:
+        return _openai_error_response(
+            str(exc.detail),
+            status_code=exc.status_code,
+            error_type="invalid_request_error",
+        )
+
+    return await _proxy_openai_request(
+        "/v1/chat/completions",
+        method="POST",
+        payload=prepared_payload,
+        stream=bool(prepared_payload.get("stream")),
+    )
 
 
 @app.get("/api/health", response_model=HealthResponse, dependencies=[Depends(_require_auth)])
