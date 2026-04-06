@@ -259,13 +259,14 @@ async def _proxy_openai_request(
                         if chunk:
                             yield chunk
             except httpx.HTTPStatusError as exc:
-                body = exc.response.text
+                body = await exc.response.aread()
+                body_text = body.decode("utf-8", errors="replace")
                 try:
-                    error_payload = exc.response.json()
+                    error_payload = json.loads(body_text)
                 except ValueError:
                     error_payload = {
                         "error": {
-                            "message": body or "Upstream request failed.",
+                            "message": body_text or "Upstream request failed.",
                             "type": "invalid_request_error",
                             "param": None,
                             "code": None,
@@ -409,6 +410,66 @@ async def openai_chat_completions(
             error_type="invalid_request_error",
         )
 
+    return await _proxy_openai_request(
+        "/v1/chat/completions",
+        method="POST",
+        payload=prepared_payload,
+        stream=bool(prepared_payload.get("stream")),
+    )
+
+
+# Claude Code 客户端调用的接口：/v1/messages
+@app.post("/v1/messages")
+async def anthropic_messages(
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    """
+    Claude 格式 → 自动转换为 OpenAI 格式
+    完美适配 Claude Code / Claude 客户端
+    """
+    try:
+        # 复用你现有的 API Key 校验
+        _require_openai_api_key(authorization)
+    except HTTPException as exc:
+        return _openai_error_response(
+            str(exc.detail),
+            status_code=exc.status_code,
+            error_type="authentication_error",
+        )
+
+    # 1. 获取 Claude 客户端的请求体
+    try:
+        claude_payload = await request.json()
+    except ValueError:
+        return _openai_error_response(
+            "Request body must be valid JSON.",
+            status_code=400,
+            error_type="invalid_request_error",
+        )
+
+    # 2. 【核心】Claude格式 → 转换为 OpenAI格式
+    openai_payload = {
+        "model": claude_payload.get("model", "gemma-4-E4B"),
+        "messages": claude_payload.get("messages", []),
+        "stream": claude_payload.get("stream", False),
+        # 兼容 Claude 的参数映射
+        "max_tokens": claude_payload.get("max_tokens", 4096),
+        "temperature": claude_payload.get("temperature", 0.7),
+    }
+
+    # 3. 复用你现有的载荷处理逻辑
+    available_models = await _load_models()
+    try:
+        prepared_payload = _prepare_openai_payload(openai_payload, available_models)
+    except HTTPException as exc:
+        return _openai_error_response(
+            str(exc.detail),
+            status_code=exc.status_code,
+            error_type="invalid_request_error",
+        )
+
+    # 4. 转发到你现有的 OpenAI 接口
     return await _proxy_openai_request(
         "/v1/chat/completions",
         method="POST",
