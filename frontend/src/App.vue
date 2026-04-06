@@ -350,24 +350,48 @@ function readFileAsDataUrl(file) {
   });
 }
 
+async function processImageFile(file) {
+  if (!file) return;
+
+  if (!file.type.startsWith("image/")) {
+    throw new Error("Please upload an image file.");
+  }
+  if (file.size > IMAGE_SIZE_LIMIT) {
+    throw new Error("Image must be 8 MB or smaller.");
+  }
+
+  selectedImageDataUrl.value = await readFileAsDataUrl(file);
+  selectedImageName.value = file.name || "Pasted image";
+  statusMessage.value = `Attached image: ${selectedImageName.value}`;
+}
+
 async function handleImageSelection(event) {
   const file = event.target.files?.[0];
   if (!file) return;
 
   try {
-    if (!file.type.startsWith("image/")) {
-      throw new Error("Please upload an image file.");
-    }
-    if (file.size > IMAGE_SIZE_LIMIT) {
-      throw new Error("Image must be 8 MB or smaller.");
-    }
-
-    selectedImageDataUrl.value = await readFileAsDataUrl(file);
-    selectedImageName.value = file.name;
-    statusMessage.value = `Attached image: ${file.name}`;
+    await processImageFile(file);
   } catch (error) {
     clearPendingImage();
     statusMessage.value = error instanceof Error ? error.message : "Failed to load image.";
+  }
+}
+
+async function handleComposerPaste(event) {
+  const items = Array.from(event.clipboardData?.items || []);
+  const imageItem = items.find((item) => item.type.startsWith("image/"));
+  if (!imageItem) return;
+
+  const file = imageItem.getAsFile();
+  if (!file) return;
+
+  event.preventDefault();
+
+  try {
+    await processImageFile(file);
+  } catch (error) {
+    clearPendingImage();
+    statusMessage.value = error instanceof Error ? error.message : "Failed to load pasted image.";
   }
 }
 
@@ -599,6 +623,7 @@ onMounted(async () => {
               class="composer-input"
               placeholder="Send a message to your local model..."
               rows="4"
+              @paste="handleComposerPaste"
             />
 
             <div class="composer-toolbar">
@@ -612,8 +637,16 @@ onMounted(async () => {
                 @change="handleImageSelection"
               />
               <span class="upload-hint">
-                {{ selectedImageName || "Single image, up to 8 MB, sent inline to vLLM." }}
+                {{ selectedImageName || "Upload or paste one image, up to 8 MB." }}
               </span>
+              <div class="composer-toolbar-actions">
+                <button class="ghost-button" type="button" @click="stopGeneration" :disabled="!isSending">
+                  Stop
+                </button>
+                <button class="primary-button" type="submit" :disabled="isSending || !hasPendingInput">
+                  {{ isSending ? "Generating..." : "Send" }}
+                </button>
+              </div>
             </div>
 
             <div v-if="selectedImageDataUrl" class="image-attachment">
@@ -623,15 +656,6 @@ onMounted(async () => {
                 <span>Image will be sent with your next prompt.</span>
               </div>
               <button class="ghost-button" type="button" @click="clearPendingImage">Remove</button>
-            </div>
-
-            <div class="composer-actions">
-              <button class="ghost-button" type="button" @click="stopGeneration" :disabled="!isSending">
-                Stop
-              </button>
-              <button class="primary-button" type="submit" :disabled="isSending || !hasPendingInput">
-                {{ isSending ? "Generating..." : "Send" }}
-              </button>
             </div>
           </form>
         </section>
