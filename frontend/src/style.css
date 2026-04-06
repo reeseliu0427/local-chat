@@ -259,6 +259,84 @@ button {
   word-break: break-word;
 }
 
+.markdown-content {
+  white-space: normal;
+}
+
+.markdown-content > :first-child {
+  margin-top: 0;
+}
+
+.markdown-content > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content p,
+.markdown-content ul,
+.markdown-content ol,
+.markdown-content pre,
+.markdown-content blockquote,
+.markdown-content table {
+  margin: 0.75rem 0;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  padding-left: 1.4rem;
+}
+
+.markdown-content li + li {
+  margin-top: 0.25rem;
+}
+
+.markdown-content a {
+  color: #8fc2ff;
+}
+
+.markdown-content code {
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  font-size: 0.94em;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 0.45rem;
+  padding: 0.15rem 0.35rem;
+}
+
+.markdown-content pre {
+  overflow: auto;
+  padding: 0.95rem 1rem;
+  border-radius: 0.95rem;
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.markdown-content pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.markdown-content blockquote {
+  padding-left: 1rem;
+  border-left: 3px solid rgba(255, 130, 67, 0.5);
+  color: #c9d7f3;
+}
+
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.markdown-content th,
+.markdown-content td {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: left;
+}
+
+.markdown-content th {
+  background: rgba(255, 255, 255, 0.05);
+}
+
 .role-user {
   align-self: flex-end;
   background: linear-gradient(135deg, rgba(26, 115, 232, 0.32), rgba(26, 115, 232, 0.16));
