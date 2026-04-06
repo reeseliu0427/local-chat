@@ -16,8 +16,26 @@ const connectionState = ref("checking");
 const isSending = ref(false);
 const statusMessage = ref("Connecting to backend...");
 const abortController = ref(null);
+const isAuthenticated = ref(false);
+const isAuthenticating = ref(false);
+const authUser = ref("");
+const loginUsername = ref("");
+const loginPassword = ref("");
+const loginError = ref("");
 
 const hasMessages = computed(() => messages.value.length > 0);
+
+function sanitizeTemperature(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0.7;
+  return Math.min(2, Math.max(0, numeric));
+}
+
+function sanitizeMaxTokens(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 512;
+  return Math.min(4096, Math.max(1, Math.round(numeric)));
+}
 
 function persistState() {
   localStorage.setItem(
@@ -57,6 +75,11 @@ async function fetchConfig() {
       fetch("/api/health"),
     ]);
 
+    if (configResponse.status === 401 || healthResponse.status === 401) {
+      handleAuthExpired();
+      return;
+    }
+
     if (!configResponse.ok || !healthResponse.ok) {
       throw new Error("Backend returned a non-200 response.");
     }
@@ -76,6 +99,69 @@ async function fetchConfig() {
   } catch (error) {
     connectionState.value = "offline";
     statusMessage.value = error instanceof Error ? error.message : "Failed to reach backend.";
+  }
+}
+
+async function fetchSession() {
+  const response = await fetch("/api/auth/session");
+  if (!response.ok) {
+    throw new Error("Failed to check login status.");
+  }
+  const session = await response.json();
+  isAuthenticated.value = !!session.authenticated;
+  authUser.value = session.username || "";
+  return session;
+}
+
+function handleAuthExpired(message = "Session expired. Sign in again.") {
+  isAuthenticated.value = false;
+  authUser.value = "";
+  loginPassword.value = "";
+  loginError.value = "";
+  connectionState.value = "offline";
+  statusMessage.value = message;
+  abortController.value?.abort();
+}
+
+async function submitLogin() {
+  if (isAuthenticating.value) return;
+  loginError.value = "";
+  isAuthenticating.value = true;
+
+  try {
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: loginUsername.value.trim(),
+        password: loginPassword.value,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(await parseErrorResponse(response));
+    }
+
+    const session = await response.json();
+    isAuthenticated.value = !!session.authenticated;
+    authUser.value = session.username || "";
+    loginPassword.value = "";
+    statusMessage.value = "Signed in.";
+    await fetchConfig();
+  } catch (error) {
+    loginError.value = error instanceof Error ? error.message : "Login failed.";
+  } finally {
+    isAuthenticating.value = false;
+  }
+}
+
+async function logout() {
+  try {
+    await fetch("/api/auth/logout", {
+      method: "POST",
+    });
+  } finally {
+    handleAuthExpired("Signed out.");
   }
 }
 
@@ -134,6 +220,11 @@ async function sendNonStreamingFallback(payload) {
     body: JSON.stringify(payload),
   });
 
+  if (response.status === 401) {
+    handleAuthExpired();
+    throw new Error("Authentication required.");
+  }
+
   if (!response.ok) {
     throw new Error(await parseErrorResponse(response));
   }
@@ -143,7 +234,7 @@ async function sendNonStreamingFallback(payload) {
 }
 
 async function sendMessage() {
-  if (isSending.value || !draft.value.trim()) return;
+  if (isSending.value || !draft.value.trim() || !isAuthenticated.value) return;
   if (!selectedModel.value) {
     statusMessage.value = "No model is available from the backend.";
     return;
@@ -158,11 +249,13 @@ async function sendMessage() {
   const controller = new AbortController();
   abortController.value = controller;
   let assistantContent = "";
+  temperature.value = sanitizeTemperature(temperature.value);
+  maxTokens.value = sanitizeMaxTokens(maxTokens.value);
   const payload = {
     model: selectedModel.value,
     messages: buildRequestMessages(),
-    temperature: temperature.value,
-    max_tokens: maxTokens.value,
+    temperature: sanitizeTemperature(temperature.value),
+    max_tokens: sanitizeMaxTokens(maxTokens.value),
   };
 
   try {
@@ -172,6 +265,11 @@ async function sendMessage() {
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
+
+    if (response.status === 401) {
+      handleAuthExpired();
+      return;
+    }
 
     if (!response.ok || !response.body) {
       throw new Error(await parseErrorResponse(response));
@@ -243,76 +341,133 @@ function clearConversation() {
 
 onMounted(async () => {
   loadState();
-  await fetchConfig();
+  try {
+    const session = await fetchSession();
+    if (session.authenticated) {
+      await fetchConfig();
+    } else {
+      statusMessage.value = "Sign in to access the local model.";
+    }
+  } catch (error) {
+    statusMessage.value = error instanceof Error ? error.message : "Failed to reach backend.";
+  }
 });
 </script>
 
 <template>
-  <div class="shell">
+  <div class="shell" :class="{ 'shell-login': !isAuthenticated }">
     <div class="shell-background"></div>
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">Local LLM Workbench</p>
-        <h1>Chat against your local vLLM backend.</h1>
-      </div>
-      <div class="topbar-actions">
-        <button class="ghost-button" type="button" @click="fetchConfig">Refresh backend</button>
-        <button class="ghost-button" type="button" @click="clearConversation" :disabled="!hasMessages">
-          Clear chat
-        </button>
-      </div>
-    </header>
+    <template v-if="!isAuthenticated">
+      <main class="login-shell">
+        <section class="login-card">
+          <p class="eyebrow">Private Access</p>
+          <h1>Sign in to Local Chat</h1>
+          <p class="login-copy">
+            This workspace is protected before it can reach your FastAPI and vLLM backend.
+          </p>
 
-    <main class="workspace">
-      <ControlPanel
-        v-model="selectedModel"
-        v-model:system-prompt="systemPrompt"
-        v-model:temperature="temperature"
-        v-model:max-tokens="maxTokens"
-        :available-models="availableModels"
-        :connection-state="connectionState"
-      />
+          <form class="login-form" @submit.prevent="submitLogin">
+            <label class="field-label" for="loginUsername">Username</label>
+            <input
+              id="loginUsername"
+              v-model="loginUsername"
+              class="field-input"
+              type="text"
+              autocomplete="username"
+              placeholder="Enter username"
+            />
 
-      <section class="chat-stage">
-        <div class="status-bar">
-          <span>{{ statusMessage }}</span>
-          <span>{{ selectedModel || "No model selected" }}</span>
+            <label class="field-label" for="loginPassword">Password</label>
+            <input
+              id="loginPassword"
+              v-model="loginPassword"
+              class="field-input"
+              type="password"
+              autocomplete="current-password"
+              placeholder="Enter password"
+            />
+
+            <p class="login-status">{{ loginError || statusMessage }}</p>
+
+            <button
+              class="primary-button login-button"
+              type="submit"
+              :disabled="isAuthenticating || !loginUsername.trim() || !loginPassword"
+            >
+              {{ isAuthenticating ? "Signing in..." : "Sign in" }}
+            </button>
+          </form>
+        </section>
+      </main>
+    </template>
+
+    <template v-else>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Local LLM Workbench</p>
+          <h1>DHU SIIS leisgroup local LLM</h1>
         </div>
+        <div class="topbar-actions">
+          <span class="session-badge">{{ authUser }}</span>
+          <button class="ghost-button" type="button" @click="fetchConfig">Refresh backend</button>
+          <button class="ghost-button" type="button" @click="clearConversation" :disabled="!hasMessages">
+            Clear chat
+          </button>
+          <button class="ghost-button" type="button" @click="logout">Sign out</button>
+        </div>
+      </header>
 
-        <div class="message-list">
-          <div v-if="!hasMessages" class="empty-state">
-            <p class="eyebrow">Ready</p>
-            <h2>Ask the local model anything.</h2>
-            <p>
-              The UI talks to FastAPI, and FastAPI proxies requests to the vLLM service running on
-              this machine.
-            </p>
+      <main class="workspace">
+        <ControlPanel
+          v-model="selectedModel"
+          v-model:system-prompt="systemPrompt"
+          v-model:temperature="temperature"
+          v-model:max-tokens="maxTokens"
+          :available-models="availableModels"
+          :connection-state="connectionState"
+        />
+
+        <section class="chat-stage">
+          <div class="status-bar">
+            <span>{{ statusMessage }}</span>
+            <span>{{ selectedModel || "No model selected" }}</span>
           </div>
 
-          <ChatMessage
-            v-for="(message, index) in messages"
-            :key="`${message.role}-${index}`"
-            :message="message"
-          />
-        </div>
+          <div class="message-list">
+            <div v-if="!hasMessages" class="empty-state">
+              <p class="eyebrow">Ready</p>
+              <h2>Ask the local model anything.</h2>
+              <p>
+                The UI talks to FastAPI, and FastAPI proxies requests to the vLLM service running on
+                this machine.
+              </p>
+            </div>
 
-        <form class="composer" @submit.prevent="sendMessage">
-          <textarea
-            v-model="draft"
-            class="composer-input"
-            placeholder="Send a message to your local model..."
-            rows="4"
-          />
-          <div class="composer-actions">
-            <button class="ghost-button" type="button" @click="stopGeneration" :disabled="!isSending">
-              Stop
-            </button>
-            <button class="primary-button" type="submit" :disabled="isSending || !draft.trim()">
-              {{ isSending ? "Generating..." : "Send" }}
-            </button>
+            <ChatMessage
+              v-for="(message, index) in messages"
+              :key="`${message.role}-${index}`"
+              :message="message"
+            />
           </div>
-        </form>
-      </section>
-    </main>
+
+          <form class="composer" @submit.prevent="sendMessage">
+            <textarea
+              v-model="draft"
+              class="composer-input"
+              placeholder="Send a message to your local model..."
+              rows="4"
+            />
+            <div class="composer-actions">
+              <button class="ghost-button" type="button" @click="stopGeneration" :disabled="!isSending">
+                Stop
+              </button>
+              <button class="primary-button" type="submit" :disabled="isSending || !draft.trim()">
+                {{ isSending ? "Generating..." : "Send" }}
+              </button>
+            </div>
+          </form>
+        </section>
+      </main>
+    </template>
   </div>
 </template>

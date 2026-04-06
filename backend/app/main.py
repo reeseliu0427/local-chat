@@ -1,15 +1,26 @@
+import base64
+import hashlib
+import hmac
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
-from .models import ChatRequest, ChatResponse, ConfigResponse, HealthResponse
+from .models import (
+    ChatRequest,
+    ChatResponse,
+    ConfigResponse,
+    HealthResponse,
+    LoginRequest,
+    SessionResponse,
+)
 
 settings = get_settings()
 
@@ -36,6 +47,71 @@ def _vllm_url(path: str) -> str:
     return f"{settings.vllm_base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
+def _session_signature(username: str, expires_at: int) -> str:
+    payload = f"{username}:{expires_at}".encode("utf-8")
+    secret = settings.auth_session_secret.encode("utf-8")
+    return hmac.new(secret, payload, hashlib.sha256).hexdigest()
+
+
+def _create_session_token(username: str) -> str:
+    expires_at = int(time.time()) + settings.auth_session_ttl_hours * 3600
+    raw = f"{username}:{expires_at}:{_session_signature(username, expires_at)}"
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("utf-8")
+
+
+def _decode_session_token(session_token: str | None) -> str | None:
+    if not session_token:
+        return None
+    try:
+        decoded = base64.urlsafe_b64decode(session_token.encode("utf-8")).decode("utf-8")
+        username, expires_at_raw, signature = decoded.split(":", 2)
+        expires_at = int(expires_at_raw)
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+    if expires_at < int(time.time()):
+        return None
+
+    expected_signature = _session_signature(username, expires_at)
+    if not hmac.compare_digest(signature, expected_signature):
+        return None
+    return username
+
+
+def _set_session_cookie(response: Response, username: str) -> None:
+    response.set_cookie(
+        key=settings.auth_cookie_name,
+        value=_create_session_token(username),
+        max_age=settings.auth_session_ttl_hours * 3600,
+        httponly=True,
+        samesite="lax",
+        secure=settings.auth_cookie_secure,
+        path="/",
+    )
+
+
+def _clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=settings.auth_cookie_name,
+        httponly=True,
+        samesite="lax",
+        secure=settings.auth_cookie_secure,
+        path="/",
+    )
+
+
+def _require_auth(
+    session_token: str | None = Cookie(default=None, alias=settings.auth_cookie_name),
+) -> str:
+    username = _decode_session_token(session_token)
+    if not username:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required.",
+        )
+    return username
+
+
 async def _load_models() -> list[str]:
     client: httpx.AsyncClient = app.state.http_client
     try:
@@ -57,7 +133,34 @@ def _resolve_model(requested_model: str | None, available_models: list[str]) -> 
     raise HTTPException(status_code=503, detail="No vLLM model is currently available.")
 
 
-@app.get("/api/health", response_model=HealthResponse)
+@app.get("/api/auth/session", response_model=SessionResponse)
+async def auth_session(
+    session_token: str | None = Cookie(default=None, alias=settings.auth_cookie_name),
+) -> SessionResponse:
+    username = _decode_session_token(session_token)
+    return SessionResponse(authenticated=bool(username), username=username)
+
+
+@app.post("/api/auth/login", response_model=SessionResponse)
+async def auth_login(payload: LoginRequest, response: Response) -> SessionResponse:
+    valid_username = hmac.compare_digest(payload.username, settings.auth_username)
+    valid_password = hmac.compare_digest(payload.password, settings.auth_password)
+    if not (valid_username and valid_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password.",
+        )
+    _set_session_cookie(response, payload.username)
+    return SessionResponse(authenticated=True, username=payload.username)
+
+
+@app.post("/api/auth/logout", response_model=SessionResponse)
+async def auth_logout(response: Response) -> SessionResponse:
+    _clear_session_cookie(response)
+    return SessionResponse(authenticated=False, username=None)
+
+
+@app.get("/api/health", response_model=HealthResponse, dependencies=[Depends(_require_auth)])
 async def health() -> HealthResponse:
     models = await _load_models()
     return HealthResponse(
@@ -70,7 +173,7 @@ async def health() -> HealthResponse:
     )
 
 
-@app.get("/api/config", response_model=ConfigResponse)
+@app.get("/api/config", response_model=ConfigResponse, dependencies=[Depends(_require_auth)])
 async def config() -> ConfigResponse:
     models = await _load_models()
     default_model = settings.vllm_model or (models[0] if models else None)
@@ -82,7 +185,7 @@ async def config() -> ConfigResponse:
     )
 
 
-@app.post("/api/chat", response_model=ChatResponse)
+@app.post("/api/chat", response_model=ChatResponse, dependencies=[Depends(_require_auth)])
 async def chat(request: ChatRequest) -> ChatResponse:
     client: httpx.AsyncClient = app.state.http_client
     models = await _load_models()
@@ -110,7 +213,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     return ChatResponse(content=content, raw=raw)
 
 
-@app.post("/api/chat/stream")
+@app.post("/api/chat/stream", dependencies=[Depends(_require_auth)])
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
     models = await _load_models()
     payload = {
@@ -156,14 +259,19 @@ frontend_dist_dir = settings.frontend_dist_dir
 if frontend_dist_dir.exists():
     app.mount("/assets", StaticFiles(directory=frontend_dist_dir / "assets"), name="assets")
 
+    def _index_response() -> FileResponse:
+        return FileResponse(
+            frontend_dist_dir / "index.html",
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.get("/", include_in_schema=False)
     async def serve_index() -> FileResponse:
-        return FileResponse(frontend_dist_dir / "index.html")
+        return _index_response()
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str) -> FileResponse:
         requested = frontend_dist_dir / full_path
         if full_path and requested.exists() and requested.is_file():
             return FileResponse(requested)
-        return FileResponse(frontend_dist_dir / "index.html")
-
+        return _index_response()

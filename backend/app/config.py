@@ -11,6 +11,12 @@ class Settings(BaseSettings):
     app_name: str = Field(default="Local Chat")
     app_env: str = Field(default="development")
     request_timeout_seconds: float = Field(default=600.0)
+    auth_username: str = Field(default="admin")
+    auth_password: str = Field(default="change-me")
+    auth_session_secret: str = Field(default="local-chat-session-secret")
+    auth_cookie_name: str = Field(default="local_chat_session")
+    auth_cookie_secure: bool = Field(default=False)
+    auth_session_ttl_hours: int = Field(default=72)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -26,4 +32,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

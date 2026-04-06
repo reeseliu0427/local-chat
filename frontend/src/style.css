@@ -49,6 +49,11 @@ button {
   padding: 2rem;
 }
 
+.shell-login {
+  display: grid;
+  place-items: center;
+}
+
 .shell-background {
   position: absolute;
   inset: 0;
@@ -102,6 +107,48 @@ button {
   grid-template-columns: 340px minmax(0, 1fr);
   gap: 1.25rem;
   min-height: calc(100vh - 9rem);
+}
+
+.login-shell {
+  position: relative;
+  z-index: 1;
+  width: min(30rem, 100%);
+}
+
+.login-card {
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(10, 17, 35, 0.94), rgba(12, 20, 40, 0.84));
+  backdrop-filter: blur(20px);
+  border-radius: 1.75rem;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+  padding: 2rem;
+}
+
+.login-card h1 {
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 2.8rem);
+  line-height: 1;
+}
+
+.login-copy {
+  color: var(--text-dim);
+  margin: 0.9rem 0 1.5rem;
+}
+
+.login-form {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.login-status {
+  min-height: 1.5rem;
+  margin: 0.25rem 0 0;
+  color: var(--text-dim);
+}
+
+.login-button {
+  margin-top: 0.4rem;
+  justify-self: start;
 }
 
 .control-panel,
@@ -259,6 +306,16 @@ button {
   border-color: var(--border);
 }
 
+.session-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.65rem 0.95rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
 .primary-button:hover,
 .ghost-button:hover {
   transform: translateY(-1px);
@@ -326,5 +383,8 @@ button {
   .message-card {
     max-width: 100%;
   }
-}
 
+  .login-card {
+    padding: 1.4rem;
+  }
+}
