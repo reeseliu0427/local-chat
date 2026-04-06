@@ -4,6 +4,8 @@ import ChatMessage from "./components/ChatMessage.vue";
 import ControlPanel from "./components/ControlPanel.vue";
 
 const STORAGE_KEY = "local-chat-state-v1";
+const IMAGE_SIZE_LIMIT = 8 * 1024 * 1024;
+const IMAGE_RELOAD_PLACEHOLDER = "[Image omitted after reload]";
 
 const messages = ref([]);
 const draft = ref("");
@@ -22,8 +24,12 @@ const authUser = ref("");
 const loginUsername = ref("");
 const loginPassword = ref("");
 const loginError = ref("");
+const selectedImageDataUrl = ref("");
+const selectedImageName = ref("");
+const composerFileInput = ref(null);
 
 const hasMessages = computed(() => messages.value.length > 0);
+const hasPendingInput = computed(() => Boolean(draft.value.trim() || selectedImageDataUrl.value));
 
 function sanitizeTemperature(value) {
   const numeric = Number(value);
@@ -37,11 +43,77 @@ function sanitizeMaxTokens(value) {
   return Math.min(4096, Math.max(1, Math.round(numeric)));
 }
 
+function normalizeContentPart(part) {
+  if (!part || typeof part !== "object") return null;
+
+  if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
+    return { type: "text", text: part.text.trim() };
+  }
+
+  if (
+    part.type === "image_url" &&
+    part.image_url &&
+    typeof part.image_url.url === "string" &&
+    part.image_url.url
+  ) {
+    return {
+      type: "image_url",
+      image_url: { url: part.image_url.url },
+    };
+  }
+
+  return null;
+}
+
+function normalizeStoredMessage(message) {
+  if (!message || typeof message !== "object") return null;
+  if (!["system", "user", "assistant"].includes(message.role)) return null;
+
+  if (typeof message.content === "string" && message.content.trim()) {
+    return { role: message.role, content: message.content };
+  }
+
+  if (Array.isArray(message.content)) {
+    const parts = message.content.map(normalizeContentPart).filter(Boolean);
+    if (parts.length) {
+      return { role: message.role, content: parts };
+    }
+  }
+
+  return null;
+}
+
+function serializeContentForStorage(content) {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return content
+    .map((part) => {
+      if (part?.type === "text" && typeof part.text === "string") {
+        return part.text;
+      }
+      if (part?.type === "image_url") {
+        return IMAGE_RELOAD_PLACEHOLDER;
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 function persistState() {
   localStorage.setItem(
     STORAGE_KEY,
     JSON.stringify({
-      messages: messages.value,
+      messages: messages.value.map((message) => ({
+        role: message.role,
+        content: serializeContentForStorage(message.content),
+      })),
       selectedModel: selectedModel.value,
       systemPrompt: systemPrompt.value,
       temperature: temperature.value,
@@ -53,9 +125,12 @@ function persistState() {
 function loadState() {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return;
+
   try {
     const parsed = JSON.parse(raw);
-    messages.value = Array.isArray(parsed.messages) ? parsed.messages : [];
+    messages.value = Array.isArray(parsed.messages)
+      ? parsed.messages.map(normalizeStoredMessage).filter(Boolean)
+      : [];
     selectedModel.value = parsed.selectedModel || "";
     systemPrompt.value = parsed.systemPrompt || "";
     temperature.value = parsed.temperature ?? 0.7;
@@ -111,6 +186,14 @@ async function fetchSession() {
   isAuthenticated.value = !!session.authenticated;
   authUser.value = session.username || "";
   return session;
+}
+
+function clearPendingImage() {
+  selectedImageDataUrl.value = "";
+  selectedImageName.value = "";
+  if (composerFileInput.value) {
+    composerFileInput.value.value = "";
+  }
 }
 
 function handleAuthExpired(message = "Session expired. Sign in again.") {
@@ -170,15 +253,24 @@ function buildRequestMessages() {
   if (systemPrompt.value.trim()) {
     outgoing.push({ role: "system", content: systemPrompt.value.trim() });
   }
+
   return outgoing.concat(
     messages.value
-      .filter(
-        (message) =>
-          typeof message?.content === "string" &&
-          message.content.trim() &&
-          ["system", "user", "assistant"].includes(message.role),
-      )
-      .map(({ role, content }) => ({ role, content: content.trim() })),
+      .map((message) => {
+        if (typeof message?.content === "string" && message.content.trim()) {
+          return { role: message.role, content: message.content.trim() };
+        }
+
+        if (Array.isArray(message?.content)) {
+          const content = message.content.map(normalizeContentPart).filter(Boolean);
+          if (content.length) {
+            return { role: message.role, content };
+          }
+        }
+
+        return null;
+      })
+      .filter(Boolean),
   );
 }
 
@@ -233,18 +325,68 @@ async function sendNonStreamingFallback(payload) {
   upsertAssistantMessage(parsed.content || "No content returned.");
 }
 
+function buildUserMessageContent(text, imageUrl) {
+  if (!imageUrl) {
+    return text;
+  }
+
+  const content = [];
+  if (text) {
+    content.push({ type: "text", text });
+  }
+  content.push({
+    type: "image_url",
+    image_url: { url: imageUrl },
+  });
+  return content;
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Failed to read image."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleImageSelection(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  try {
+    if (!file.type.startsWith("image/")) {
+      throw new Error("Please upload an image file.");
+    }
+    if (file.size > IMAGE_SIZE_LIMIT) {
+      throw new Error("Image must be 8 MB or smaller.");
+    }
+
+    selectedImageDataUrl.value = await readFileAsDataUrl(file);
+    selectedImageName.value = file.name;
+    statusMessage.value = `Attached image: ${file.name}`;
+  } catch (error) {
+    clearPendingImage();
+    statusMessage.value = error instanceof Error ? error.message : "Failed to load image.";
+  }
+}
+
 async function sendMessage() {
-  if (isSending.value || !draft.value.trim() || !isAuthenticated.value) return;
+  if (isSending.value || !hasPendingInput.value || !isAuthenticated.value) return;
   if (!selectedModel.value) {
     statusMessage.value = "No model is available from the backend.";
     return;
   }
 
-  const userContent = draft.value.trim();
+  const userText = draft.value.trim();
+  const imageUrl = selectedImageDataUrl.value;
+  const userMessageContent = buildUserMessageContent(userText, imageUrl);
+
   draft.value = "";
-  messages.value.push({ role: "user", content: userContent });
+  clearPendingImage();
+  messages.value.push({ role: "user", content: userMessageContent });
   isSending.value = true;
-  statusMessage.value = "Generating...";
+  statusMessage.value = imageUrl ? "Analyzing image..." : "Generating...";
 
   const controller = new AbortController();
   abortController.value = controller;
@@ -293,13 +435,13 @@ async function sendMessage() {
           .find((item) => item.startsWith("data: "));
         if (!line) continue;
 
-        const payload = line.slice(6);
-        if (payload === "[DONE]") {
+        const eventPayload = line.slice(6);
+        if (eventPayload === "[DONE]") {
           statusMessage.value = "Ready.";
           continue;
         }
 
-        const parsed = JSON.parse(payload);
+        const parsed = JSON.parse(eventPayload);
         const delta = parsed.choices?.[0]?.delta;
         const contentDelta = parseDelta(delta);
         if (!contentDelta) continue;
@@ -336,6 +478,7 @@ function stopGeneration() {
 
 function clearConversation() {
   messages.value = [];
+  clearPendingImage();
   statusMessage.value = "Conversation cleared.";
 }
 
@@ -457,11 +600,36 @@ onMounted(async () => {
               placeholder="Send a message to your local model..."
               rows="4"
             />
+
+            <div class="composer-toolbar">
+              <label class="ghost-button upload-button" for="composerImage">Upload image</label>
+              <input
+                id="composerImage"
+                ref="composerFileInput"
+                class="hidden-file-input"
+                type="file"
+                accept="image/*"
+                @change="handleImageSelection"
+              />
+              <span class="upload-hint">
+                {{ selectedImageName || "Single image, up to 8 MB, sent inline to vLLM." }}
+              </span>
+            </div>
+
+            <div v-if="selectedImageDataUrl" class="image-attachment">
+              <img :src="selectedImageDataUrl" :alt="selectedImageName || 'Selected image'" class="attachment-preview" />
+              <div class="attachment-meta">
+                <strong>{{ selectedImageName || "Attached image" }}</strong>
+                <span>Image will be sent with your next prompt.</span>
+              </div>
+              <button class="ghost-button" type="button" @click="clearPendingImage">Remove</button>
+            </div>
+
             <div class="composer-actions">
               <button class="ghost-button" type="button" @click="stopGeneration" :disabled="!isSending">
                 Stop
               </button>
-              <button class="primary-button" type="submit" :disabled="isSending || !draft.trim()">
+              <button class="primary-button" type="submit" :disabled="isSending || !hasPendingInput">
                 {{ isSending ? "Generating..." : "Send" }}
               </button>
             </div>

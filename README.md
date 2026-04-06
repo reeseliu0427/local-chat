@@ -63,4 +63,5 @@ Then run the backend. If `frontend/dist` exists, FastAPI also serves the compile
 - The backend proxies chat requests to the vLLM server instead of exposing the model endpoint directly to the browser.
 - Streaming is enabled through `/api/chat/stream`.
 - The default UI assumes the vLLM backend is already running on port `9006`.
+- The chat UI supports a single uploaded image per prompt for multimodal models such as Gemma 4.
 - Login uses a simple FastAPI-issued HttpOnly cookie. Change the default auth values before exposing the app publicly.

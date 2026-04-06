@@ -1,11 +1,28 @@
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
 
+class TextContentPart(BaseModel):
+    type: Literal["text"]
+    text: str = Field(min_length=1)
+
+
+class ImageUrlPayload(BaseModel):
+    url: str = Field(min_length=1)
+
+
+class ImageContentPart(BaseModel):
+    type: Literal["image_url"]
+    image_url: ImageUrlPayload
+
+
+ContentPart = Annotated[TextContentPart | ImageContentPart, Field(discriminator="type")]
+
+
 class Message(BaseModel):
     role: Literal["system", "user", "assistant"]
-    content: str = Field(min_length=1)
+    content: str | list[ContentPart]
 
 
 class ChatRequest(BaseModel):
